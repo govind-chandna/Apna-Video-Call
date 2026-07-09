@@ -22,10 +22,13 @@ export const connectToSocket = (server) => {
 
         socket.on("join-call", (path) => {
 
-            if (connections[path] === undefined) {
-                connections[path] = []
+            if (!connections[path]) {
+                connections[path] = [];
+               }
+
+            if (!connections[path].includes(socket.id)) {
+                connections[path].push(socket.id);
             }
-            connections[path].push(socket.id)
 
             timeOnline[socket.id] = new Date();
 
