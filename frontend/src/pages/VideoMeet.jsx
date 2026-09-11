@@ -1,1940 +1,1701 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import server from "../environment";
-
-import styles from "../styles/videoComponent.module.css";
-
-import { Button, IconButton, TextField } from "@mui/material";
+import io from "socket.io-client";
+import { Badge, IconButton, TextField, Button } from "@mui/material";
 
 import VideocamIcon from "@mui/icons-material/Videocam";
 import VideocamOffIcon from "@mui/icons-material/VideocamOff";
+import CallEndIcon from "@mui/icons-material/CallEnd";
 import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
-import CallEndIcon from "@mui/icons-material/CallEnd";
 import ScreenShareIcon from "@mui/icons-material/ScreenShare";
 import StopScreenShareIcon from "@mui/icons-material/StopScreenShare";
 import ChatIcon from "@mui/icons-material/Chat";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import ShareIcon from "@mui/icons-material/Share";
 
-import io from "socket.io-client";
+import styles from "../styles/videoComponent.module.css";
+import server from "../environment";
 
+const server_url = server;
 
-function VideoMeet() {
-    const socketRef = useRef(null);
-    const socketIdRef = useRef(null);
+const peerConfigConnections = {
+  iceServers: [
+    {
+      urls: "stun:stun.l.google.com:19302",
+    },
+  ],
+};
 
-    const localVideoref = useRef(null);
+export default function VideoMeetComponent() {
+  const socketRef = useRef(null);
+  const socketIdRef = useRef(null);
+  const localVideoref = useRef(null);
 
-    const connections = useRef({});
-    const pendingIceCandidates = useRef({});
+  const connections = useRef({});
+  const pendingIceCandidates = useRef({});
 
-    const navigate = useNavigate();
-    const { url } = useParams();
+  const [videoAvailable, setVideoAvailable] = useState(true);
+  const [audioAvailable, setAudioAvailable] = useState(true);
 
-    const [askForUsername, setAskForUsername] = useState(true);
-    const [username, setUsername] = useState("");
+  const [video, setVideo] = useState();
+  const [audio, setAudio] = useState();
 
-    const [videoAvailable, setVideoAvailable] = useState(true);
-    const [audioAvailable, setAudioAvailable] = useState(true);
+  const [screen, setScreen] = useState();
+  const [screenAvailable, setScreenAvailable] = useState(false);
 
-    const videoAvailableRef = useRef(true);
-    const audioAvailableRef = useRef(true);
+  const [showModal, setModal] = useState(false);
 
-    const [video, setVideo] = useState(true);
-    const [audio, setAudio] = useState(true);
+  const [messages, setMessages] = useState([]);
+  const [message, setMessage] = useState("");
+  const [newMessages, setNewMessages] = useState(0);
 
-    const [videos, setVideos] = useState([]);
+  const [askForUsername, setAskForUsername] = useState(true);
+  const [username, setUsername] = useState("");
 
-    const [messages, setMessages] = useState([]);
-    const [message, setMessage] = useState("");
+  const [videos, setVideos] = useState([]);
 
-    const [newMessages, setNewMessages] = useState(0);
+  const meetingId =
+    window.location.pathname.split("/meet/")[1] || "Meeting";
 
-    const [askForUsernameError, setAskForUsernameError] = useState("");
+  /*
+   * =========================
+   * CLEANUP
+   * =========================
+   */
 
-    const [showModal, setShowModal] = useState(false);
+  const cleanupConnection = (id) => {
+    try {
+      if (connections.current[id]) {
+        connections.current[id].onicecandidate = null;
+        connections.current[id].ontrack = null;
+        connections.current[id].close();
+      }
+    } catch (error) {}
 
-    const [screen, setScreen] = useState(false);
+    delete connections.current[id];
+    delete pendingIceCandidates.current[id];
 
-    const [copySuccess, setCopySuccess] = useState(false);
+    setVideos((prev) =>
+      prev.filter((video) => video.socketId !== id)
+    );
+  };
 
+  /*
+   * =========================
+   * PERMISSIONS
+   * =========================
+   */
 
-    // --------------------------------------------------
-    // GET CAMERA + MICROPHONE PERMISSION
-    // --------------------------------------------------
+  useEffect(() => {
+    getPermissions();
 
-    const getPermissions = async () => {
-        let videoPermission = false;
-        let audioPermission = false;
+    return () => {
+      Object.keys(connections.current).forEach((id) => {
+        cleanupConnection(id);
+      });
 
-        try {
-            const videoStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: false
-            });
-
-            videoPermission = true;
-
-            videoStream.getTracks().forEach((track) => {
-                track.stop();
-            });
-
-            console.log("Video permission granted");
-
-        } catch (err) {
-            console.log("Video permission denied");
-        }
-
-
-        try {
-            const audioStream = await navigator.mediaDevices.getUserMedia({
-                video: false,
-                audio: true
-            });
-
-            audioPermission = true;
-
-            audioStream.getTracks().forEach((track) => {
-                track.stop();
-            });
-
-            console.log("Audio permission granted");
-
-        } catch (err) {
-            console.log("Audio permission denied");
-        }
-
-
-        videoAvailableRef.current = videoPermission;
-        audioAvailableRef.current = audioPermission;
-
-        setVideoAvailable(videoPermission);
-        setAudioAvailable(audioPermission);
-
-        setVideo(videoPermission);
-        setAudio(audioPermission);
-    };
-
-
-    // --------------------------------------------------
-    // INITIAL PERMISSION CHECK
-    // --------------------------------------------------
-
-    useEffect(() => {
-        getPermissions();
-
-        return () => {
-            if (window.localStream) {
-                window.localStream.getTracks().forEach((track) => {
-                    track.stop();
-                });
-            }
-
-            if (window.screenStream) {
-                window.screenStream.getTracks().forEach((track) => {
-                    track.stop();
-                });
-            }
-
-            Object.values(connections.current).forEach((connection) => {
-                try {
-                    connection.close();
-                } catch (err) {
-                    console.log(err);
-                }
-            });
-
-            if (socketRef.current) {
-                socketRef.current.disconnect();
-            }
-        };
-    }, []);
-
-
-    // --------------------------------------------------
-    // CREATE LOCAL MEDIA STREAM
-    // --------------------------------------------------
-
-    const prepareLocalMedia = async () => {
-        try {
-            const needVideo = videoAvailableRef.current;
-            const needAudio = audioAvailableRef.current;
-
-            let stream = window.localStream;
-
-            const hasVideo =
-                stream &&
-                stream.getVideoTracks &&
-                stream.getVideoTracks().length > 0;
-
-            const hasAudio =
-                stream &&
-                stream.getAudioTracks &&
-                stream.getAudioTracks().length > 0;
-
-
-            // Already have correct stream
-            if (
-                stream &&
-                (!needVideo || hasVideo) &&
-                (!needAudio || hasAudio)
-            ) {
-                stream.getVideoTracks().forEach((track) => {
-                    track.enabled = video;
-                });
-
-                stream.getAudioTracks().forEach((track) => {
-                    track.enabled = audio;
-                });
-
-                if (localVideoref.current) {
-                    localVideoref.current.srcObject = stream;
-                }
-
-                return stream;
-            }
-
-
-            // If old stream exists, stop it first
-            if (stream) {
-                stream.getTracks().forEach((track) => {
-                    track.stop();
-                });
-            }
-
-
-            // Browser does not allow both false
-            if (!needVideo && !needAudio) {
-                const emptyStream = new MediaStream();
-
-                window.localStream = emptyStream;
-
-                if (localVideoref.current) {
-                    localVideoref.current.srcObject = emptyStream;
-                }
-
-                return emptyStream;
-            }
-
-
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: needVideo,
-                audio: needAudio
-            });
-
-
-            stream.getVideoTracks().forEach((track) => {
-                track.enabled = video;
-            });
-
-            stream.getAudioTracks().forEach((track) => {
-                track.enabled = audio;
-            });
-
-
-            window.localStream = stream;
-
-
-            if (localVideoref.current) {
-                localVideoref.current.srcObject = stream;
-            }
-
-
-            console.log("Local media stream ready");
-
-            return stream;
-
-        } catch (error) {
-            console.error("MEDIA ERROR:", error);
-
-            alert(
-                "Camera/Microphone access nahi mil raha. Browser permission check karo."
-            );
-
-            throw error;
-        }
-    };
-
-
-    // --------------------------------------------------
-    // CREATE PEER CONNECTION
-    // --------------------------------------------------
-
-    const createPeerConnection = (remoteId) => {
-
-        if (connections.current[remoteId]) {
-            return connections.current[remoteId];
-        }
-
-
-        const peer = new RTCPeerConnection({
-            iceServers: [
-                {
-                    urls: "stun:stun.l.google.com:19302"
-                }
-            ]
-        });
-
-
-        connections.current[remoteId] = peer;
-
-
-        // -------------------------------
-        // ADD LOCAL TRACKS
-        // -------------------------------
-
-        const localStream = window.localStream;
-
-        if (localStream) {
-
-            localStream.getTracks().forEach((track) => {
-
-                try {
-                    peer.addTrack(track, localStream);
-                } catch (error) {
-                    console.log("ADD TRACK ERROR:", error);
-                }
-
-            });
-
-        } else {
-            console.log("WARNING: Local stream not ready");
-        }
-
-
-        // -------------------------------
-        // ICE CANDIDATE
-        // -------------------------------
-
-        peer.onicecandidate = (event) => {
-
-            if (event.candidate && socketRef.current) {
-
-                socketRef.current.emit(
-                    "signal",
-                    remoteId,
-                    JSON.stringify({
-                        ice: event.candidate
-                    })
-                );
-
-            }
-
-        };
-
-
-        // -------------------------------
-        // REMOTE VIDEO
-        // -------------------------------
-
-        peer.ontrack = (event) => {
-
-            const stream = event.streams && event.streams[0];
-
-            if (!stream) return;
-
-
-            setVideos((currentVideos) => {
-
-                const alreadyExists = currentVideos.some(
-                    (video) => video.socketId === remoteId
-                );
-
-
-                if (alreadyExists) {
-
-                    return currentVideos.map((video) => {
-
-                        if (video.socketId === remoteId) {
-
-                            return {
-                                ...video,
-                                stream: stream
-                            };
-
-                        }
-
-                        return video;
-
-                    });
-
-                }
-
-
-                return [
-                    ...currentVideos,
-                    {
-                        socketId: remoteId,
-                        stream: stream
-                    }
-                ];
-
-            });
-
-        };
-
-
-        // -------------------------------
-        // CONNECTION STATE
-        // -------------------------------
-
-        peer.onconnectionstatechange = () => {
-
-            const state = peer.connectionState;
-
-            console.log(
-                "Peer",
-                remoteId,
-                "connection state:",
-                state
-            );
-
-
-            if (
-                state === "failed" ||
-                state === "closed"
-            ) {
-
-                cleanupConnection(remoteId);
-
-            }
-
-        };
-
-
-        return peer;
-    };
-
-
-    // --------------------------------------------------
-    // CLEANUP ONE CONNECTION
-    // --------------------------------------------------
-
-    const cleanupConnection = (remoteId) => {
-
-        const peer = connections.current[remoteId];
-
-        if (peer) {
-
-            try {
-                peer.ontrack = null;
-                peer.onicecandidate = null;
-                peer.close();
-            } catch (error) {
-                console.log(error);
-            }
-
-        }
-
-
-        delete connections.current[remoteId];
-
-        delete pendingIceCandidates.current[remoteId];
-
-
-        setVideos((currentVideos) =>
-            currentVideos.filter(
-                (video) => video.socketId !== remoteId
-            )
-        );
-
-    };
-
-
-    // --------------------------------------------------
-    // CREATE OFFER
-    // --------------------------------------------------
-
-    const createOfferFor = async (remoteId) => {
-
-        const peer = connections.current[remoteId];
-
-        if (!peer) {
-            console.log(
-                "Offer skipped - peer does not exist:",
-                remoteId
-            );
-
-            return;
-        }
-
-
-        if (!socketRef.current) return;
-
-
-        if (peer.signalingState !== "stable") {
-
-            console.log(
-                "Offer skipped - signaling state:",
-                peer.signalingState
-            );
-
-            return;
-        }
-
-
-        try {
-
-            const offer = await peer.createOffer();
-
-
-            if (!connections.current[remoteId]) {
-                return;
-            }
-
-
-            if (peer.signalingState !== "stable") {
-                return;
-            }
-
-
-            await peer.setLocalDescription(offer);
-
-
-            if (!peer.localDescription) {
-                return;
-            }
-
-
-            socketRef.current.emit(
-                "signal",
-                remoteId,
-                JSON.stringify({
-                    sdp: peer.localDescription
-                })
-            );
-
-
-        } catch (error) {
-
-            console.error(
-                "CREATE OFFER ERROR:",
-                error
-            );
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // HANDLE SIGNAL
-    // --------------------------------------------------
-
-    const gotMessageFromServer = async (
-        fromId,
-        message
-    ) => {
-
-        try {
-
-            const signal = JSON.parse(message);
-
-
-            let peer = connections.current[fromId];
-
-
-            if (!peer) {
-
-                peer = createPeerConnection(fromId);
-
-            }
-
-
-            // ------------------------------------
-            // ICE
-            // ------------------------------------
-
-            if (signal.ice) {
-
-                if (peer.remoteDescription) {
-
-                    try {
-
-                        await peer.addIceCandidate(
-                            new RTCIceCandidate(signal.ice)
-                        );
-
-                    } catch (error) {
-
-                        console.log(
-                            "ICE ERROR:",
-                            error
-                        );
-
-                    }
-
-                } else {
-
-                    if (!pendingIceCandidates.current[fromId]) {
-
-                        pendingIceCandidates.current[fromId] = [];
-
-                    }
-
-                    pendingIceCandidates.current[fromId].push(
-                        signal.ice
-                    );
-
-                }
-
-                return;
-            }
-
-
-            // ------------------------------------
-            // SDP
-            // ------------------------------------
-
-            if (!signal.sdp) {
-                return;
-            }
-
-
-            const description = signal.sdp;
-
-
-            // ------------------------------------
-            // ANSWER
-            // ------------------------------------
-
-            if (description.type === "answer") {
-
-                if (
-                    peer.signalingState !==
-                    "have-local-offer"
-                ) {
-
-                    console.log(
-                        "Ignoring answer. Current state:",
-                        peer.signalingState
-                    );
-
-                    return;
-                }
-
-
-                await peer.setRemoteDescription(
-                    new RTCSessionDescription(description)
-                );
-
-
-                const queued =
-                    pendingIceCandidates.current[fromId] || [];
-
-
-                for (const candidate of queued) {
-
-                    try {
-
-                        await peer.addIceCandidate(
-                            new RTCIceCandidate(candidate)
-                        );
-
-                    } catch (error) {
-
-                        console.log(
-                            "Queued ICE ERROR:",
-                            error
-                        );
-
-                    }
-
-                }
-
-
-                pendingIceCandidates.current[fromId] = [];
-
-
-                return;
-            }
-
-
-            // ------------------------------------
-            // OFFER
-            // ------------------------------------
-
-            if (description.type === "offer") {
-
-                if (
-                    peer.signalingState !==
-                    "stable"
-                ) {
-
-                    console.log(
-                        "Ignoring offer. Current state:",
-                        peer.signalingState
-                    );
-
-                    return;
-                }
-
-
-                await peer.setRemoteDescription(
-                    new RTCSessionDescription(description)
-                );
-
-
-                const queued =
-                    pendingIceCandidates.current[fromId] || [];
-
-
-                for (const candidate of queued) {
-
-                    try {
-
-                        await peer.addIceCandidate(
-                            new RTCIceCandidate(candidate)
-                        );
-
-                    } catch (error) {
-
-                        console.log(
-                            "Queued ICE ERROR:",
-                            error
-                        );
-
-                    }
-
-                }
-
-
-                pendingIceCandidates.current[fromId] = [];
-
-
-                const answer =
-                    await peer.createAnswer();
-
-
-                await peer.setLocalDescription(answer);
-
-
-                if (
-                    socketRef.current &&
-                    peer.localDescription
-                ) {
-
-                    socketRef.current.emit(
-                        "signal",
-                        fromId,
-                        JSON.stringify({
-                            sdp: peer.localDescription
-                        })
-                    );
-
-                }
-
-            }
-
-        } catch (error) {
-
-            console.error(
-                "SIGNAL ERROR:",
-                error
-            );
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // CONNECT SOCKET
-    // --------------------------------------------------
-
-    const connectToSocketServer = () => {
-
+      try {
         if (socketRef.current) {
-            return;
+          socketRef.current.disconnect();
         }
+      } catch (error) {}
 
-
-        const socket = io(server);
-
-        socketRef.current = socket;
-
-
-        // ------------------------------------
-        // CONNECT
-        // ------------------------------------
-
-        socket.on("connect", () => {
-
-            socketIdRef.current = socket.id;
-
-
-            console.log(
-                "Socket connected:",
-                socket.id
-            );
-
-
-            socket.emit(
-                "join-call",
-                url
-            );
-
-        });
-
-
-        // ------------------------------------
-        // USER JOINED
-        // ------------------------------------
-
-        socket.on(
-            "user-joined",
-            async (id, clients) => {
-
-                console.log(
-                    "User joined:",
-                    id
-                );
-
-
-                // Create peer connections
-                // for all other clients
-
-                for (const clientId of clients) {
-
-                    if (
-                        clientId === socketIdRef.current
-                    ) {
-                        continue;
-                    }
-
-
-                    createPeerConnection(
-                        clientId
-                    );
-
-                }
-
-
-                // IMPORTANT:
-                // Only the newly joined user
-                // creates offers.
-
-                if (
-                    id === socketIdRef.current
-                ) {
-
-                    for (const clientId of clients) {
-
-                        if (
-                            clientId === socketIdRef.current
-                        ) {
-                            continue;
-                        }
-
-
-                        await createOfferFor(
-                            clientId
-                        );
-
-                    }
-
-                }
-
-            }
-        );
-
-
-        // ------------------------------------
-        // SIGNAL
-        // ------------------------------------
-
-        socket.on(
-            "signal",
-            gotMessageFromServer
-        );
-
-
-        // ------------------------------------
-        // USER LEFT
-        // ------------------------------------
-
-        socket.on(
-            "user-left",
-            (id) => {
-
-                console.log(
-                    "User left:",
-                    id
-                );
-
-                cleanupConnection(id);
-
-            }
-        );
-
-
-        // ------------------------------------
-        // CHAT MESSAGE
-        // ------------------------------------
-
-        socket.on(
-            "chat-message",
-            (data, sender, socketIdSender) => {
-
-                setMessages((currentMessages) => [
-                    ...currentMessages,
-                    {
-                        data: data,
-                        sender: sender
-                    }
-                ]);
-
-
-                setNewMessages(
-                    (currentCount) =>
-                        currentCount + 1
-                );
-
-            }
-        );
-
-    };
-
-
-    // --------------------------------------------------
-    // JOIN MEETING
-    // --------------------------------------------------
-
-    const connect = async () => {
-
-        setAskForUsernameError("");
-
-
-        if (!username.trim()) {
-
-            setAskForUsernameError(
-                "Please enter your name"
-            );
-
-            return;
-        }
-
-
-        try {
-
-            // VERY IMPORTANT:
-            // Media is ready BEFORE socket/WebRTC.
-
-            await prepareLocalMedia();
-
-
-            setAskForUsername(false);
-
-
-            connectToSocketServer();
-
-        } catch (error) {
-
-            console.error(
-                "JOIN ERROR:",
-                error
-            );
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // VIDEO ON/OFF
-    // --------------------------------------------------
-
-    const handleVideo = () => {
-
-        const newValue = !video;
-
-        setVideo(newValue);
-
-
+      try {
         if (window.localStream) {
-
-            window.localStream
-                .getVideoTracks()
-                .forEach((track) => {
-
-                    track.enabled = newValue;
-
-                });
-
+          window.localStream.getTracks().forEach((track) => {
+            track.stop();
+          });
         }
+      } catch (error) {}
 
-    };
-
-
-    // --------------------------------------------------
-    // AUDIO ON/OFF
-    // --------------------------------------------------
-
-    const handleAudio = () => {
-
-        const newValue = !audio;
-
-        setAudio(newValue);
-
-
-        if (window.localStream) {
-
-            window.localStream
-                .getAudioTracks()
-                .forEach((track) => {
-
-                    track.enabled = newValue;
-
-                });
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // SCREEN SHARE
-    // --------------------------------------------------
-
-    const handleScreen = async () => {
-
-        if (screen) {
-
-            // Stop screen sharing
-
-            setScreen(false);
-
-
-            const cameraStream =
-                window.localStream;
-
-
-            if (!cameraStream) {
-                return;
-            }
-
-
-            const cameraTrack =
-                cameraStream.getVideoTracks()[0];
-
-
-            if (!cameraTrack) {
-                return;
-            }
-
-
-            cameraTrack.enabled = video;
-
-
-            // Put camera back in local video
-
-            if (localVideoref.current) {
-
-                localVideoref.current.srcObject =
-                    cameraStream;
-
-            }
-
-
-            // Replace screen track
-            // with camera track
-
-            for (
-                const remoteId of Object.keys(
-                    connections.current
-                )
-            ) {
-
-                const peer =
-                    connections.current[remoteId];
-
-
-                const sender =
-                    peer
-                        .getSenders()
-                        .find(
-                            (s) =>
-                                s.track &&
-                                s.track.kind ===
-                                    "video"
-                        );
-
-
-                if (sender) {
-
-                    try {
-
-                        await sender.replaceTrack(
-                            cameraTrack
-                        );
-
-                    } catch (error) {
-
-                        console.log(
-                            "CAMERA REPLACE ERROR:",
-                            error
-                        );
-
-                    }
-
-                }
-
-            }
-
-
-            if (window.screenStream) {
-
-                window.screenStream
-                    .getTracks()
-                    .forEach((track) =>
-                        track.stop()
-                    );
-
-                window.screenStream = null;
-
-            }
-
-
-            return;
-        }
-
-
-        // Start screen sharing
-
-        try {
-
-            const stream =
-                await navigator.mediaDevices.getDisplayMedia({
-                    video: true,
-                    audio: false
-                });
-
-
-            const screenTrack =
-                stream.getVideoTracks()[0];
-
-
-            window.screenStream = stream;
-
-
-            if (localVideoref.current) {
-
-                localVideoref.current.srcObject =
-                    stream;
-
-            }
-
-
-            for (
-                const remoteId of Object.keys(
-                    connections.current
-                )
-            ) {
-
-                const peer =
-                    connections.current[remoteId];
-
-
-                const sender =
-                    peer
-                        .getSenders()
-                        .find(
-                            (s) =>
-                                s.track &&
-                                s.track.kind ===
-                                    "video"
-                        );
-
-
-                if (sender) {
-
-                    try {
-
-                        await sender.replaceTrack(
-                            screenTrack
-                        );
-
-                    } catch (error) {
-
-                        console.log(
-                            "SCREEN SHARE ERROR:",
-                            error
-                        );
-
-                    }
-
-                }
-
-            }
-
-
-            setScreen(true);
-
-
-            screenTrack.onended = () => {
-
-                handleScreen();
-
-            };
-
-        } catch (error) {
-
-            console.log(
-                "Screen share cancelled:",
-                error
-            );
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // SEND CHAT MESSAGE
-    // --------------------------------------------------
-
-    const sendMessage = () => {
-
-        const text = message.trim();
-
-
-        if (!text) {
-            return;
-        }
-
-
-        if (!socketRef.current) {
-            return;
-        }
-
-
-        socketRef.current.emit(
-            "chat-message",
-            text,
-            username
-        );
-
-
-        setMessages((currentMessages) => [
-            ...currentMessages,
-            {
-                data: text,
-                sender: username
-            }
-        ]);
-
-
-        setMessage("");
-
-    };
-
-
-    // --------------------------------------------------
-    // ENTER KEY CHAT
-    // --------------------------------------------------
-
-    const handleChatKeyDown = (event) => {
-
-        if (event.key === "Enter") {
-
-            event.preventDefault();
-
-            sendMessage();
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // COPY MEETING LINK
-    // --------------------------------------------------
-
-    const copyMeetingLink = async () => {
-
-        try {
-
-            await navigator.clipboard.writeText(
-                window.location.href
-            );
-
-
-            setCopySuccess(true);
-
-
-            setTimeout(() => {
-
-                setCopySuccess(false);
-
-            }, 2000);
-
-        } catch (error) {
-
-            console.log(
-                "COPY ERROR:",
-                error
-            );
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // SHARE MEETING
-    // --------------------------------------------------
-
-    const shareMeeting = async () => {
-
-        const shareData = {
-            title: "Video Meeting",
-            text: "Join my video meeting",
-            url: window.location.href
-        };
-
-
-        try {
-
-            if (
-                navigator.share
-            ) {
-
-                await navigator.share(
-                    shareData
-                );
-
-            } else {
-
-                await copyMeetingLink();
-
-            }
-
-        } catch (error) {
-
-            console.log(
-                "SHARE ERROR:",
-                error
-            );
-
-        }
-
-    };
-
-
-    // --------------------------------------------------
-    // END CALL
-    // --------------------------------------------------
-
-    const endCall = () => {
-
-        if (socketRef.current) {
-
-            socketRef.current.disconnect();
-
-            socketRef.current = null;
-
-        }
-
-
-        Object.values(
-            connections.current
-        ).forEach((peer) => {
-
-            try {
-                peer.close();
-            } catch (error) {
-                console.log(error);
-            }
-
-        });
-
-
-        connections.current = {};
-
-
-        if (window.localStream) {
-
-            window.localStream
-                .getTracks()
-                .forEach((track) =>
-                    track.stop()
-                );
-
-            window.localStream = null;
-
-        }
-
-
+      try {
         if (window.screenStream) {
-
-            window.screenStream
-                .getTracks()
-                .forEach((track) =>
-                    track.stop()
-                );
-
-            window.screenStream = null;
-
+          window.screenStream.getTracks().forEach((track) => {
+            track.stop();
+          });
         }
-
-
-        navigate("/home");
-
+      } catch (error) {}
     };
+  }, []);
 
+  const getPermissions = async () => {
+    let videoPermission = false;
+    let audioPermission = false;
 
-    // --------------------------------------------------
-    // REMOTE VIDEO COMPONENT
-    // --------------------------------------------------
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+      });
 
-    const RemoteVideo = ({ stream }) => {
+      videoPermission = true;
 
-        const videoRef = useRef(null);
+      stream.getTracks().forEach((track) => track.stop());
 
-
-        useEffect(() => {
-
-            if (!videoRef.current) {
-                return;
-            }
-
-
-            videoRef.current.srcObject =
-                stream;
-
-
-            const playVideo = async () => {
-
-                try {
-
-                    await videoRef.current.play();
-
-                } catch (error) {
-
-                    console.log(
-                        "Remote video autoplay:",
-                        error
-                    );
-
-                }
-
-            };
-
-
-            playVideo();
-
-        }, [stream]);
-
-
-        return (
-            <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                className={styles.remoteVideo}
-            />
-        );
-
-    };
-
-
-    // ==================================================
-    // LOBBY
-    // ==================================================
-
-    if (askForUsername) {
-
-        return (
-            <div
-                className={
-                    styles.lobbyContainer
-                }
-            >
-
-                <div
-                    className={
-                        styles.lobbyCard
-                    }
-                >
-
-                    <h2>
-                        Join Meeting
-                    </h2>
-
-
-                    <video
-                        ref={localVideoref}
-                        autoPlay
-                        muted
-                        playsInline
-                        className={
-                            styles.lobbyVideo
-                        }
-                    />
-
-
-                    <TextField
-                        label="Enter your name"
-                        value={username}
-                        onChange={(e) =>
-                            setUsername(
-                                e.target.value
-                            )
-                        }
-                        fullWidth
-                    />
-
-
-                    {askForUsernameError && (
-
-                        <p
-                            style={{
-                                color: "red"
-                            }}
-                        >
-                            {askForUsernameError}
-                        </p>
-
-                    )}
-
-
-                    <Button
-                        variant="contained"
-                        onClick={connect}
-                        fullWidth
-                    >
-                        Join Meeting
-                    </Button>
-
-
-                    <div
-                        style={{
-                            display: "flex",
-                            gap: "10px",
-                            marginTop: "15px",
-                            justifyContent:
-                                "center"
-                        }}
-                    >
-
-                        <Button
-                            variant="outlined"
-                            onClick={
-                                copyMeetingLink
-                            }
-                        >
-                            <ContentCopyIcon />
-                            &nbsp;
-                            Copy Link
-                        </Button>
-
-
-                        <Button
-                            variant="outlined"
-                            onClick={
-                                shareMeeting
-                            }
-                        >
-                            Share
-                        </Button>
-
-                    </div>
-
-                </div>
-
-            </div>
-        );
-
+      console.log("Video permission granted");
+    } catch (error) {
+      console.log("Video permission denied");
     }
 
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
 
-    // ==================================================
-    // MAIN MEETING
-    // ==================================================
+      audioPermission = true;
 
-    return (
+      stream.getTracks().forEach((track) => track.stop());
 
-        <div
-            className={
-                styles.meetVideoContainer
+      console.log("Audio permission granted");
+    } catch (error) {
+      console.log("Audio permission denied");
+    }
+
+    setVideoAvailable(videoPermission);
+    setAudioAvailable(audioPermission);
+
+    if (navigator.mediaDevices.getDisplayMedia) {
+      setScreenAvailable(true);
+    }
+
+    if (videoPermission || audioPermission) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: videoPermission,
+          audio: audioPermission,
+        });
+
+        window.localStream = stream;
+
+        if (localVideoref.current) {
+          localVideoref.current.srcObject = stream;
+        }
+      } catch (error) {
+        console.log("Initial media error:", error);
+      }
+    }
+  };
+
+  /*
+   * =========================
+   * START MEDIA
+   * =========================
+   */
+
+  const getMedia = () => {
+    setVideo(videoAvailable);
+    setAudio(audioAvailable);
+
+    connectToSocketServer();
+  };
+
+  /*
+   * =========================
+   * MEDIA EFFECT
+   * =========================
+   */
+
+  useEffect(() => {
+    if (video !== undefined && audio !== undefined) {
+      getUserMedia();
+    }
+  }, [video, audio]);
+
+  const getUserMedia = async () => {
+    try {
+      const oldStream = window.localStream;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: video && videoAvailable,
+        audio: audio && audioAvailable,
+      });
+
+      window.localStream = stream;
+
+      if (localVideoref.current) {
+        localVideoref.current.srcObject = stream;
+      }
+
+      /*
+       * IMPORTANT:
+       * Do NOT addTrack again.
+       * Replace existing tracks instead.
+       */
+
+      Object.keys(connections.current).forEach((id) => {
+        const peerConnection = connections.current[id];
+
+        if (!peerConnection) return;
+
+        const videoTrack = stream.getVideoTracks()[0];
+        const audioTrack = stream.getAudioTracks()[0];
+
+        const videoSender = peerConnection
+          .getSenders()
+          .find(
+            (sender) =>
+              sender.track &&
+              sender.track.kind === "video"
+          );
+
+        const audioSender = peerConnection
+          .getSenders()
+          .find(
+            (sender) =>
+              sender.track &&
+              sender.track.kind === "audio"
+          );
+
+        if (videoSender) {
+          videoSender.replaceTrack(videoTrack || null);
+        }
+
+        if (audioSender) {
+          audioSender.replaceTrack(audioTrack || null);
+        }
+      });
+
+      if (oldStream) {
+        oldStream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+    } catch (error) {
+      console.log("MEDIA ERROR:", error);
+    }
+  };
+
+  /*
+   * =========================
+   * CREATE PEER CONNECTION
+   * =========================
+   */
+
+  const createPeerConnection = (remoteId) => {
+    if (connections.current[remoteId]) {
+      return connections.current[remoteId];
+    }
+
+    const peerConnection = new RTCPeerConnection(
+      peerConfigConnections
+    );
+
+    connections.current[remoteId] = peerConnection;
+
+    pendingIceCandidates.current[remoteId] = [];
+
+    /*
+     * ICE
+     */
+
+    peerConnection.onicecandidate = (event) => {
+      if (!event.candidate) return;
+
+      if (!socketRef.current) return;
+
+      socketRef.current.emit(
+        "signal",
+        remoteId,
+        JSON.stringify({
+          ice: event.candidate,
+        })
+      );
+    };
+
+    /*
+     * REMOTE VIDEO
+     */
+
+    peerConnection.ontrack = (event) => {
+      if (!event.streams || !event.streams[0]) {
+        return;
+      }
+
+      const remoteStream = event.streams[0];
+
+      setVideos((prevVideos) => {
+        const existing = prevVideos.find(
+          (video) => video.socketId === remoteId
+        );
+
+        if (existing) {
+          return prevVideos.map((video) =>
+            video.socketId === remoteId
+              ? {
+                  ...video,
+                  stream: remoteStream,
+                }
+              : video
+          );
+        }
+
+        return [
+          ...prevVideos,
+          {
+            socketId: remoteId,
+            stream: remoteStream,
+            autoplay: true,
+            playsinline: true,
+          },
+        ];
+      });
+    };
+
+    /*
+     * ADD CURRENT LOCAL TRACKS ONLY ONCE
+     */
+
+    if (window.localStream) {
+      window.localStream.getTracks().forEach((track) => {
+        try {
+          peerConnection.addTrack(
+            track,
+            window.localStream
+          );
+        } catch (error) {
+          console.log("ADD TRACK ERROR:", error);
+        }
+      });
+    }
+
+    return peerConnection;
+  };
+
+  /*
+   * =========================
+   * CREATE OFFER
+   * =========================
+   */
+
+  const createOfferFor = async (remoteId) => {
+    const peerConnection =
+      connections.current[remoteId];
+
+    if (!peerConnection) {
+      return;
+    }
+
+    try {
+      if (
+        peerConnection.signalingState !==
+        "stable"
+      ) {
+        return;
+      }
+
+      const offer =
+        await peerConnection.createOffer();
+
+      if (
+        peerConnection.signalingState !==
+        "stable"
+      ) {
+        return;
+      }
+
+      await peerConnection.setLocalDescription(
+        offer
+      );
+
+      if (!peerConnection.localDescription) {
+        return;
+      }
+
+      socketRef.current.emit(
+        "signal",
+        remoteId,
+        JSON.stringify({
+          sdp: peerConnection.localDescription,
+        })
+      );
+    } catch (error) {
+      console.log(
+        "CREATE OFFER ERROR:",
+        error
+      );
+    }
+  };
+
+  /*
+   * =========================
+   * SOCKET.IO
+   * =========================
+   */
+
+  const connectToSocketServer = () => {
+    if (socketRef.current) {
+      return;
+    }
+
+    socketRef.current = io.connect(server_url, {
+      secure: true,
+      transports: ["websocket", "polling"],
+    });
+
+    socketRef.current.on("connect", () => {
+      socketIdRef.current =
+        socketRef.current.id;
+
+      socketRef.current.emit(
+        "join-call",
+        window.location.href
+      );
+
+      socketRef.current.on(
+        "chat-message",
+        addMessage
+      );
+
+      socketRef.current.on(
+        "user-left",
+        (id) => {
+          cleanupConnection(id);
+        }
+      );
+
+      socketRef.current.on(
+        "user-joined",
+        async (id, clients) => {
+          /*
+           * Create peer connections
+           * for all other users.
+           */
+
+          clients.forEach((socketListId) => {
+            if (
+              socketListId ===
+              socketIdRef.current
+            ) {
+              return;
             }
-        >
 
-            {/* REMOTE VIDEOS */}
+            createPeerConnection(
+              socketListId
+            );
+          });
+
+          /*
+           * ONLY the newly joined user
+           * creates offers.
+           *
+           * This prevents both users from
+           * creating offers simultaneously.
+           */
+
+          if (
+            id === socketIdRef.current
+          ) {
+            for (
+              const remoteId of Object.keys(
+                connections.current
+              )
+            ) {
+              if (
+                remoteId ===
+                socketIdRef.current
+              ) {
+                continue;
+              }
+
+              await createOfferFor(
+                remoteId
+              );
+            }
+          }
+        }
+      );
+    });
+
+    socketRef.current.on(
+      "signal",
+      gotMessageFromServer
+    );
+  };
+
+  /*
+   * =========================
+   * RECEIVE SIGNAL
+   * =========================
+   */
+
+  const gotMessageFromServer = async (
+    fromId,
+    message
+  ) => {
+    try {
+      const signal = JSON.parse(message);
+
+      if (
+        fromId === socketIdRef.current
+      ) {
+        return;
+      }
+
+      let peerConnection =
+        connections.current[fromId];
+
+      if (!peerConnection) {
+        peerConnection =
+          createPeerConnection(fromId);
+      }
+
+      /*
+       * SDP
+       */
+
+      if (signal.sdp) {
+        const description =
+          new RTCSessionDescription(
+            signal.sdp
+          );
+
+        /*
+         * Ignore duplicate answers.
+         */
+
+        if (
+          description.type === "answer" &&
+          peerConnection.signalingState !==
+            "have-local-offer"
+        ) {
+          return;
+        }
+
+        /*
+         * Ignore duplicate offers when
+         * already negotiating.
+         */
+
+        if (
+          description.type === "offer" &&
+          peerConnection.signalingState !==
+            "stable"
+        ) {
+          return;
+        }
+
+        await peerConnection.setRemoteDescription(
+          description
+        );
+
+        /*
+         * Add pending ICE candidates.
+         */
+
+        if (
+          pendingIceCandidates.current[
+            fromId
+          ]
+        ) {
+          for (const candidate of
+            pendingIceCandidates.current[
+              fromId
+            ]) {
+            try {
+              await peerConnection.addIceCandidate(
+                candidate
+              );
+            } catch (error) {
+              console.log(
+                "PENDING ICE ERROR:",
+                error
+              );
+            }
+          }
+
+          pendingIceCandidates.current[
+            fromId
+          ] = [];
+        }
+
+        /*
+         * If offer received,
+         * create answer.
+         */
+
+        if (
+          description.type === "offer"
+        ) {
+          const answer =
+            await peerConnection.createAnswer();
+
+          await peerConnection.setLocalDescription(
+            answer
+          );
+
+          if (
+            peerConnection.localDescription
+          ) {
+            socketRef.current.emit(
+              "signal",
+              fromId,
+              JSON.stringify({
+                sdp:
+                  peerConnection.localDescription,
+              })
+            );
+          }
+        }
+      }
+
+      /*
+       * ICE
+       */
+
+      if (signal.ice) {
+        const candidate =
+          new RTCIceCandidate(
+            signal.ice
+          );
+
+        if (
+          peerConnection.remoteDescription
+        ) {
+          try {
+            await peerConnection.addIceCandidate(
+              candidate
+            );
+          } catch (error) {
+            console.log(
+              "ICE ERROR:",
+              error
+            );
+          }
+        } else {
+          if (
+            !pendingIceCandidates.current[
+              fromId
+            ]
+          ) {
+            pendingIceCandidates.current[
+              fromId
+            ] = [];
+          }
+
+          pendingIceCandidates.current[
+            fromId
+          ].push(candidate);
+        }
+      }
+    } catch (error) {
+      console.log(
+        "SIGNAL ERROR:",
+        error
+      );
+    }
+  };
+
+  /*
+   * =========================
+   * CAMERA
+   * =========================
+   */
+
+  const handleVideo = () => {
+    setVideo((prev) => !prev);
+  };
+
+  /*
+   * =========================
+   * MICROPHONE
+   * =========================
+   */
+
+  const handleAudio = () => {
+    setAudio((prev) => !prev);
+  };
+
+  /*
+   * =========================
+   * SCREEN SHARE
+   * =========================
+   */
+
+  useEffect(() => {
+    if (screen === undefined) return;
+
+    if (screen) {
+      startScreenShare();
+    } else {
+      stopScreenShare();
+    }
+  }, [screen]);
+
+  const startScreenShare = async () => {
+    try {
+      if (
+        !navigator.mediaDevices
+          .getDisplayMedia
+      ) {
+        alert(
+          "Screen sharing is not supported."
+        );
+
+        setScreen(false);
+        return;
+      }
+
+      const stream =
+        await navigator.mediaDevices.getDisplayMedia(
+          {
+            video: true,
+            audio: true,
+          }
+        );
+
+      const screenTrack =
+        stream.getVideoTracks()[0];
+
+      if (localVideoref.current) {
+        localVideoref.current.srcObject =
+          stream;
+      }
+
+      Object.keys(
+        connections.current
+      ).forEach((id) => {
+        const peerConnection =
+          connections.current[id];
+
+        if (!peerConnection) return;
+
+        const sender =
+          peerConnection
+            .getSenders()
+            .find(
+              (sender) =>
+                sender.track &&
+                sender.track.kind ===
+                  "video"
+            );
+
+        if (sender) {
+          sender.replaceTrack(
+            screenTrack
+          );
+        }
+      });
+
+      window.screenStream = stream;
+
+      screenTrack.onended = () => {
+        setScreen(false);
+      };
+    } catch (error) {
+      console.log(
+        "SCREEN SHARE ERROR:",
+        error
+      );
+
+      setScreen(false);
+    }
+  };
+
+  const stopScreenShare = async () => {
+    try {
+      if (window.screenStream) {
+        window.screenStream
+          .getTracks()
+          .forEach((track) => {
+            track.stop();
+          });
+
+        window.screenStream = null;
+      }
+
+      const cameraStream =
+        await navigator.mediaDevices.getUserMedia(
+          {
+            video:
+              video && videoAvailable,
+            audio:
+              audio && audioAvailable,
+          }
+        );
+
+      window.localStream =
+        cameraStream;
+
+      if (localVideoref.current) {
+        localVideoref.current.srcObject =
+          cameraStream;
+      }
+
+      const cameraTrack =
+        cameraStream.getVideoTracks()[0];
+
+      Object.keys(
+        connections.current
+      ).forEach((id) => {
+        const peerConnection =
+          connections.current[id];
+
+        if (!peerConnection) return;
+
+        const sender =
+          peerConnection
+            .getSenders()
+            .find(
+              (sender) =>
+                sender.track &&
+                sender.track.kind ===
+                  "video"
+            );
+
+        if (
+          sender &&
+          cameraTrack
+        ) {
+          sender.replaceTrack(
+            cameraTrack
+          );
+        }
+      });
+    } catch (error) {
+      console.log(
+        "CAMERA RESTORE ERROR:",
+        error
+      );
+    }
+  };
+
+  /*
+   * =========================
+   * END CALL
+   * =========================
+   */
+
+  const handleEndCall = () => {
+    try {
+      if (window.localStream) {
+        window.localStream
+          .getTracks()
+          .forEach((track) =>
+            track.stop()
+          );
+      }
+    } catch (error) {}
+
+    try {
+      if (window.screenStream) {
+        window.screenStream
+          .getTracks()
+          .forEach((track) =>
+            track.stop()
+          );
+      }
+    } catch (error) {}
+
+    Object.keys(
+      connections.current
+    ).forEach((id) => {
+      cleanupConnection(id);
+    });
+
+    try {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    } catch (error) {}
+
+    window.location.href = "/";
+  };
+
+  /*
+   * =========================
+   * CHAT
+   * =========================
+   */
+
+  const openChat = () => {
+    setModal(true);
+    setNewMessages(0);
+  };
+
+  const closeChat = () => {
+    setModal(false);
+  };
+
+  const addMessage = (
+    data,
+    sender,
+    socketIdSender
+  ) => {
+    setMessages((prevMessages) => [
+      ...prevMessages,
+      {
+        sender:
+          sender || "Participant",
+        data,
+      },
+    ]);
+
+    if (
+      socketIdSender !==
+      socketIdRef.current
+    ) {
+      setNewMessages(
+        (prev) => prev + 1
+      );
+    }
+  };
+
+  const sendMessage = () => {
+    const text = message.trim();
+
+    if (!text) return;
+
+    if (!socketRef.current) {
+      console.log(
+        "Socket not connected"
+      );
+      return;
+    }
+
+    socketRef.current.emit(
+      "chat-message",
+      text,
+      username
+    );
+
+    setMessage("");
+  };
+
+  /*
+   * =========================
+   * COPY LINK
+   * =========================
+   */
+
+  const copyMeetingLink = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        window.location.href
+      );
+
+      alert(
+        "Meeting link copied!"
+      );
+    } catch (error) {
+      console.log(
+        "COPY ERROR:",
+        error
+      );
+    }
+  };
+
+  /*
+   * =========================
+   * SHARE LINK
+   * =========================
+   */
+
+  const shareMeetingLink = async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title:
+            "Join my Velnoxa meeting",
+          text:
+            "Join my video meeting",
+          url:
+            window.location.href,
+        });
+      } else {
+        await navigator.clipboard.writeText(
+          window.location.href
+        );
+
+        alert(
+          "Sharing is not supported. Meeting link copied!"
+        );
+      }
+    } catch (error) {
+      console.log(
+        "SHARE ERROR:",
+        error
+      );
+    }
+  };
+
+  /*
+   * =========================
+   * CONNECT
+   * =========================
+   */
+
+  const connect = () => {
+    if (!username.trim()) {
+      alert(
+        "Please enter your name"
+      );
+      return;
+    }
+
+    setAskForUsername(false);
+    getMedia();
+  };
+
+  /*
+   * =========================
+   * SILENCE TRACK
+   * =========================
+   */
+
+  const silence = () => {
+    const ctx =
+      new AudioContext();
+
+    const oscillator =
+      ctx.createOscillator();
+
+    const dst =
+      oscillator.connect(
+        ctx.createMediaStreamDestination()
+      );
+
+    oscillator.start();
+    ctx.resume();
+
+    return Object.assign(
+      dst.stream.getAudioTracks()[0],
+      {
+        enabled: false,
+      }
+    );
+  };
+
+  /*
+   * =========================
+   * BLACK VIDEO TRACK
+   * =========================
+   */
+
+  const black = ({
+    width = 640,
+    height = 480,
+  } = {}) => {
+    const canvas =
+      Object.assign(
+        document.createElement(
+          "canvas"
+        ),
+        {
+          width,
+          height,
+        }
+      );
+
+    const context =
+      canvas.getContext("2d");
+
+    context.fillRect(
+      0,
+      0,
+      width,
+      height
+    );
+
+    const stream =
+      canvas.captureStream();
+
+    return Object.assign(
+      stream.getVideoTracks()[0],
+      {
+        enabled: false,
+      }
+    );
+  };
+
+  return (
+    <div>
+      {askForUsername ? (
+        /*
+         * =========================
+         * LOBBY
+         * =========================
+         */
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: "650px",
+              textAlign: "center",
+            }}
+          >
+            <h1>Velnoxa</h1>
+
+            <h2>Join Meeting</h2>
+
+            <p>
+              Meeting ID:{" "}
+              <strong>
+                {meetingId}
+              </strong>
+            </p>
 
             <div
-                className={
-                    styles.conferenceView
-                }
+              style={{
+                margin: "20px auto",
+                maxWidth: "500px",
+              }}
             >
-
-                {videos.length === 0 && (
-
-                    <div
-                        style={{
-                            color: "white",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent:
-                                "center",
-                            height: "100%",
-                            fontSize: "20px"
-                        }}
-                    >
-                        Waiting for participant...
-                    </div>
-
-                )}
-
-
-                {videos.map((video) => (
-
-                    <div
-                        key={
-                            video.socketId
-                        }
-                        style={{
-                            position:
-                                "relative"
-                        }}
-                    >
-
-                        <RemoteVideo
-                            stream={
-                                video.stream
-                            }
-                        />
-
-
-                        <div
-                            style={{
-                                position:
-                                    "absolute",
-                                bottom: "15px",
-                                left: "15px",
-                                color: "white",
-                                background:
-                                    "rgba(0,0,0,.6)",
-                                padding:
-                                    "5px 10px",
-                                borderRadius:
-                                    "8px"
-                            }}
-                        >
-                            Participant
-                        </div>
-
-                    </div>
-
-                ))}
-
-            </div>
-
-
-            {/* LOCAL VIDEO */}
-
-            <video
-                ref={localVideoref}
+              <video
+                ref={
+                  localVideoref
+                }
                 autoPlay
                 muted
                 playsInline
-                className={
-                    styles.meetUserVideo
-                }
-            />
-
-
-            {/* CHAT */}
-
-            {showModal && (
-
-                <div
-                    className={
-                        styles.chatRoom
-                    }
-                >
-
-                    <div
-                        className={
-                            styles.chatContainer
-                        }
-                    >
-
-                        <div
-                            className={
-                                styles.chatHeader
-                            }
-                        >
-
-                            <h3>
-                                Chat
-                            </h3>
-
-
-                            <button
-                                onClick={() =>
-                                    setShowModal(
-                                        false
-                                    )
-                                }
-                            >
-                                ✕
-                            </button>
-
-                        </div>
-
-
-                        <div
-                            className={
-                                styles.chattingDisplay
-                            }
-                        >
-
-                            {messages.map(
-                                (msg, index) => (
-
-                                    <div
-                                        key={index}
-                                        className={
-                                            styles.chatMessage
-                                        }
-                                    >
-
-                                        <div
-                                            className={
-                                                styles.chatSender
-                                            }
-                                        >
-                                            {
-                                                msg.sender
-                                            }
-                                        </div>
-
-
-                                        <div
-                                            className={
-                                                styles.chatText
-                                            }
-                                        >
-                                            {
-                                                msg.data
-                                            }
-                                        </div>
-
-                                    </div>
-
-                                )
-                            )}
-
-                        </div>
-
-
-                        <div
-                            className={
-                                styles.chattingArea
-                            }
-                        >
-
-                            <TextField
-                                value={message}
-                                onChange={(e) =>
-                                    setMessage(
-                                        e.target.value
-                                    )
-                                }
-                                onKeyDown={
-                                    handleChatKeyDown
-                                }
-                                placeholder="Type a message..."
-                                size="small"
-                                fullWidth
-                            />
-
-
-                            <Button
-                                variant="contained"
-                                onClick={
-                                    sendMessage
-                                }
-                            >
-                                Send
-                            </Button>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-            )}
-
-
-            {/* BOTTOM CONTROLS */}
-
-            <div
-                className={
-                    styles.buttonContainers
-                }
-            >
-
-                <IconButton
-                    onClick={
-                        handleVideo
-                    }
-                >
-
-                    {video ? (
-                        <VideocamIcon />
-                    ) : (
-                        <VideocamOffIcon />
-                    )}
-
-                </IconButton>
-
-
-                <IconButton
-                    onClick={
-                        handleAudio
-                    }
-                >
-
-                    {audio ? (
-                        <MicIcon />
-                    ) : (
-                        <MicOffIcon />
-                    )}
-
-                </IconButton>
-
-
-                <IconButton
-                    onClick={
-                        handleScreen
-                    }
-                >
-
-                    {screen ? (
-                        <StopScreenShareIcon />
-                    ) : (
-                        <ScreenShareIcon />
-                    )}
-
-                </IconButton>
-
-
-                <IconButton
-                    onClick={() => {
-
-                        setShowModal(
-                            !showModal
-                        );
-
-                        if (!showModal) {
-                            setNewMessages(0);
-                        }
-
-                    }}
-                >
-
-                    <ChatIcon />
-
-                    {newMessages > 0 && (
-
-                        <span
-                            style={{
-                                position:
-                                    "absolute",
-                                top: "0",
-                                right: "0",
-                                background:
-                                    "red",
-                                color: "white",
-                                borderRadius:
-                                    "50%",
-                                fontSize:
-                                    "11px",
-                                width: "18px",
-                                height: "18px",
-                                display:
-                                    "flex",
-                                alignItems:
-                                    "center",
-                                justifyContent:
-                                    "center"
-                            }}
-                        >
-                            {newMessages}
-                        </span>
-
-                    )}
-
-                </IconButton>
-
-
-                <IconButton
-                    onClick={
-                        copyMeetingLink
-                    }
-                >
-
-                    <ContentCopyIcon />
-
-                </IconButton>
-
-
-                <IconButton
-                    onClick={
-                        shareMeeting
-                    }
-                >
-                    Share
-                </IconButton>
-
-
-                <IconButton
-                    onClick={
-                        endCall
-                    }
-                >
-
-                    <CallEndIcon />
-
-                </IconButton>
-
+                style={{
+                  width: "100%",
+                  maxHeight:
+                    "350px",
+                  borderRadius:
+                    "12px",
+                  background:
+                    "#111",
+                  objectFit:
+                    "cover",
+                }}
+              />
             </div>
 
+            <div
+              style={{
+                display: "flex",
+                justifyContent:
+                  "center",
+                gap: "10px",
+                flexWrap:
+                  "wrap",
+              }}
+            >
+              <TextField
+                id="username"
+                label="Your Name"
+                value={username}
+                onChange={(e) =>
+                  setUsername(
+                    e.target.value
+                  )
+                }
+                variant="outlined"
+                onKeyDown={(e) => {
+                  if (
+                    e.key ===
+                    "Enter"
+                  ) {
+                    connect();
+                  }
+                }}
+              />
 
-            {/* COPY MESSAGE */}
+              <Button
+                variant="contained"
+                onClick={
+                  connect
+                }
+                style={{
+                  minHeight:
+                    "56px",
+                }}
+              >
+                Join Meeting
+              </Button>
+            </div>
 
-            {copySuccess && (
+            <div
+              style={{
+                marginTop:
+                  "20px",
+                display: "flex",
+                justifyContent:
+                  "center",
+                gap: "10px",
+                flexWrap:
+                  "wrap",
+              }}
+            >
+              <Button
+                variant="outlined"
+                onClick={
+                  copyMeetingLink
+                }
+              >
+                <ContentCopyIcon
+                  style={{
+                    marginRight:
+                      "5px",
+                  }}
+                />
+                Copy Link
+              </Button>
 
+              <Button
+                variant="outlined"
+                onClick={
+                  shareMeetingLink
+                }
+              >
+                <ShareIcon
+                  style={{
+                    marginRight:
+                      "5px",
+                  }}
+                />
+                Share
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /*
+         * =========================
+         * VIDEO MEETING
+         * =========================
+         */
+        <div
+          className={
+            styles.meetVideoContainer
+          }
+        >
+          {/* TOP BAR */}
+
+          <div
+            style={{
+              position:
+                "absolute",
+              top: "10px",
+              left: "15px",
+              right: "15px",
+              zIndex: 3000,
+              display: "flex",
+              alignItems:
+                "center",
+              justifyContent:
+                "space-between",
+              color: "white",
+            }}
+          >
+            <div>
+              <strong>
+                Velnoxa
+              </strong>
+
+              <div
+                style={{
+                  fontSize:
+                    "12px",
+                  opacity: 0.8,
+                }}
+              >
+                Meeting:{" "}
+                {meetingId}
+              </div>
+            </div>
+
+            <div
+              style={{
+                display:
+                  "flex",
+                gap: "5px",
+              }}
+            >
+              <IconButton
+                onClick={
+                  copyMeetingLink
+                }
+                style={{
+                  color:
+                    "white",
+                }}
+              >
+                <ContentCopyIcon />
+              </IconButton>
+
+              <IconButton
+                onClick={
+                  shareMeetingLink
+                }
+                style={{
+                  color:
+                    "white",
+                }}
+              >
+                <ShareIcon />
+              </IconButton>
+            </div>
+          </div>
+
+          {/* CHAT */}
+
+          {showModal && (
+            <div
+              className={
+                styles.chatRoom
+              }
+            >
+              <div
+                className={
+                  styles.chatContainer
+                }
+              >
                 <div
-                    style={{
-                        position:
-                            "fixed",
-                        top: "20px",
-                        left: "50%",
-                        transform:
-                            "translateX(-50%)",
-                        background:
-                            "rgba(0,0,0,.8)",
-                        color: "white",
-                        padding:
-                            "10px 20px",
-                        borderRadius:
-                            "10px",
-                        zIndex: 5000
-                    }}
+                  className={
+                    styles.chatHeader
+                  }
                 >
-                    Meeting link copied!
+                  <h2>Chat</h2>
+
+                  <Button
+                    onClick={
+                      closeChat
+                    }
+                    size="small"
+                  >
+                    Close
+                  </Button>
                 </div>
 
+                <div
+                  className={
+                    styles.chattingDisplay
+                  }
+                >
+                  {messages.length >
+                  0 ? (
+                    messages.map(
+                      (
+                        item,
+                        index
+                      ) => (
+                        <div
+                          key={
+                            index
+                          }
+                          className={
+                            styles.chatMessage
+                          }
+                        >
+                          <p
+                            className={
+                              styles.chatSender
+                            }
+                          >
+                            {
+                              item.sender
+                            }
+                          </p>
+
+                          <p
+                            className={
+                              styles.chatText
+                            }
+                          >
+                            {
+                              item.data
+                            }
+                          </p>
+                        </div>
+                      )
+                    )
+                  ) : (
+                    <p>
+                      No Messages Yet
+                    </p>
+                  )}
+                </div>
+
+                <div
+                  className={
+                    styles.chattingArea
+                  }
+                >
+                  <TextField
+                    value={
+                      message
+                    }
+                    onChange={(e) =>
+                      setMessage(
+                        e.target.value
+                      )
+                    }
+                    onKeyDown={(e) => {
+                      if (
+                        e.key ===
+                        "Enter"
+                      ) {
+                        e.preventDefault();
+                        sendMessage();
+                      }
+                    }}
+                    label="Enter Your Chat"
+                    variant="outlined"
+                    size="small"
+                    fullWidth
+                  />
+
+                  <Button
+                    variant="contained"
+                    onClick={
+                      sendMessage
+                    }
+                  >
+                    Send
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CONTROL BAR */}
+
+          <div
+            className={
+              styles.buttonContainers
+            }
+          >
+            <IconButton
+              onClick={
+                handleVideo
+              }
+              style={{
+                color: "white",
+              }}
+            >
+              {video ? (
+                <VideocamIcon />
+              ) : (
+                <VideocamOffIcon />
+              )}
+            </IconButton>
+
+            <IconButton
+              onClick={
+                handleEndCall
+              }
+              style={{
+                color: "red",
+              }}
+            >
+              <CallEndIcon />
+            </IconButton>
+
+            <IconButton
+              onClick={
+                handleAudio
+              }
+              style={{
+                color: "white",
+              }}
+            >
+              {audio ? (
+                <MicIcon />
+              ) : (
+                <MicOffIcon />
+              )}
+            </IconButton>
+
+            {screenAvailable && (
+              <IconButton
+                onClick={() =>
+                  setScreen(
+                    (prev) =>
+                      !prev
+                  )
+                }
+                style={{
+                  color:
+                    "white",
+                }}
+              >
+                {screen ? (
+                  <ScreenShareIcon />
+                ) : (
+                  <StopScreenShareIcon />
+                )}
+              </IconButton>
             )}
 
+            <IconButton
+              onClick={
+                copyMeetingLink
+              }
+              style={{
+                color: "white",
+              }}
+            >
+              <ContentCopyIcon />
+            </IconButton>
+
+            <IconButton
+              onClick={
+                shareMeetingLink
+              }
+              style={{
+                color: "white",
+              }}
+            >
+              <ShareIcon />
+            </IconButton>
+
+            <Badge
+              badgeContent={
+                newMessages >
+                0
+                  ? newMessages
+                  : null
+              }
+              max={999}
+              color="error"
+            >
+              <IconButton
+                onClick={() => {
+                  if (
+                    showModal
+                  ) {
+                    closeChat();
+                  } else {
+                    openChat();
+                  }
+                }}
+                style={{
+                  color:
+                    "white",
+                }}
+              >
+                <ChatIcon />
+              </IconButton>
+            </Badge>
+          </div>
+
+          {/* LOCAL VIDEO */}
+
+          <video
+            className={
+              styles.meetUserVideo
+            }
+            ref={
+              localVideoref
+            }
+            autoPlay
+            muted
+            playsInline
+          />
+
+          {/* REMOTE VIDEOS */}
+
+          <div
+            className={
+              styles.conferenceView
+            }
+            style={{
+              display:
+                "grid",
+              gridTemplateColumns:
+                videos.length <=
+                1
+                  ? "1fr"
+                  : videos.length <=
+                    4
+                  ? "1fr 1fr"
+                  : "repeat(auto-fit,minmax(300px,1fr))",
+              gap: "20px",
+              padding: "20px",
+            }}
+          >
+            {videos.map(
+              (video) => (
+                <div
+                  key={
+                    video.socketId
+                  }
+                  style={{
+                    position:
+                      "relative",
+                    width:
+                      "100%",
+                    minHeight:
+                      "200px",
+                    background:
+                      "#111",
+                    borderRadius:
+                      "12px",
+                    overflow:
+                      "hidden",
+                  }}
+                >
+                  <video
+                    data-socket={
+                      video.socketId
+                    }
+                    ref={(ref) => {
+                      if (
+                        ref &&
+                        video.stream
+                      ) {
+                        ref.srcObject =
+                          video.stream;
+
+                        ref.onloadedmetadata =
+                          () => {
+                            ref
+                              .play()
+                              .catch(
+                                (
+                                  error
+                                ) =>
+                                  console.log(
+                                    "VIDEO PLAY ERROR:",
+                                    error
+                                  )
+                              );
+                          };
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    className={
+                      styles.remoteVideo
+                    }
+                  />
+
+                  <div
+                    style={{
+                      position:
+                        "absolute",
+                      bottom:
+                        "10px",
+                      left: "10px",
+                      background:
+                        "rgba(0,0,0,0.6)",
+                      color:
+                        "white",
+                      padding:
+                        "5px 10px",
+                      borderRadius:
+                        "6px",
+                      fontSize:
+                        "13px",
+                    }}
+                  >
+                    Participant
+                  </div>
+                </div>
+              )
+            )}
+          </div>
         </div>
-
-    );
+      )}
+    </div>
+  );
 }
-
-
-export default VideoMeet;
