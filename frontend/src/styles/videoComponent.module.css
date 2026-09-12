@@ -1,4 +1,4 @@
-.meetVideoContainer {
+/* .meetVideoContainer {
     position: relative;
     height: 100vh;
     background: rgb(1, 4, 48);
@@ -58,4 +58,249 @@
 .chattingArea {
     position: absolute;
     bottom: 0;
+} */
+
+.meetVideoContainer {
+  position: relative;
+  height: 100vh;
+  width: 100%;
+  background: rgb(1, 4, 48);
+  overflow: hidden;
+}
+
+/* =========================
+   MAIN VIDEO AREA
+========================= */
+
+.conferenceView {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+
+  width: 100%;
+  height: calc(100vh - 80px);
+
+  padding: 15px;
+  gap: 12px;
+
+  box-sizing: border-box;
+}
+
+/* Video */
+
+.conferenceView video {
+  width: 100%;
+  height: 100%;
+
+  min-height: 250px;
+
+  object-fit: cover;
+
+  border-radius: 14px;
+
+  background: #111;
+
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* =========================
+   YOUR VIDEO
+========================= */
+
+.meetUserVideo {
+  position: absolute;
+
+  right: 25px;
+  bottom: 95px;
+
+  height: 160px;
+  width: 220px;
+
+  object-fit: cover;
+
+  border-radius: 14px;
+
+  border: 2px solid white;
+
+  background: #111;
+
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.6);
+
+  z-index: 2000;
+}
+
+/* =========================
+   BOTTOM BUTTONS
+========================= */
+
+.buttonContainers {
+  position: absolute;
+
+  width: 100%;
+
+  bottom: 15px;
+
+  left: 0;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  gap: 15px;
+
+  z-index: 3000;
+}
+
+.buttonContainers svg {
+  font-size: 3rem;
+
+  cursor: pointer;
+}
+
+/* =========================
+   CHAT
+========================= */
+
+.chatRoom {
+  position: absolute;
+
+  height: 90vh;
+
+  top: 5vh;
+  right: 15px;
+
+  background: white;
+
+  border-radius: 15px;
+
+  width: 30vw;
+
+  min-width: 300px;
+
+  padding-inline: 20px;
+
+  box-sizing: border-box;
+
+  z-index: 4000;
+
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+.chatContainer {
+  position: relative;
+
+  height: 100%;
+}
+
+.chattingArea {
+  position: absolute;
+
+  bottom: 0;
+
+  left: 0;
+  right: 0;
+
+  display: flex;
+  gap: 8px;
+
+  padding-bottom: 10px;
+}
+
+.chattingArea input {
+  flex: 1;
+
+  height: 40px;
+
+  padding: 0 10px;
+
+  border: 1px solid #ccc;
+
+  border-radius: 6px;
+
+  box-sizing: border-box;
+}
+
+/* =========================
+   MOBILE
+========================= */
+
+@media (max-width: 768px) {
+  .conferenceView {
+    grid-template-columns: 1fr;
+
+    height: calc(100vh - 75px);
+
+    padding: 8px;
+
+    gap: 8px;
+  }
+
+  .conferenceView video {
+    min-height: 200px;
+
+    border-radius: 10px;
+  }
+
+  /* Your video */
+
+  .meetUserVideo {
+    width: 125px;
+    height: 90px;
+
+    right: 10px;
+    bottom: 80px;
+
+    border-radius: 10px;
+  }
+
+  /* Controls */
+
+  .buttonContainers {
+    bottom: 10px;
+
+    gap: 8px;
+  }
+
+  .buttonContainers svg {
+    font-size: 2.2rem;
+  }
+
+  /* Chat */
+
+  .chatRoom {
+    width: 100%;
+
+    min-width: 0;
+
+    height: 70vh;
+
+    top: auto;
+    right: 0;
+    bottom: 0;
+
+    border-radius: 15px 15px 0 0;
+
+    padding-inline: 15px;
+  }
+}
+
+/* =========================
+   SMALL MOBILE
+========================= */
+
+@media (max-width: 480px) {
+  .meetUserVideo {
+    width: 105px;
+    height: 75px;
+
+    right: 8px;
+    bottom: 75px;
+  }
+
+  .buttonContainers {
+    gap: 5px;
+  }
+
+  .buttonContainers svg {
+    font-size: 1.9rem;
+  }
 }
