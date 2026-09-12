@@ -62,19 +62,21 @@
 
 .meetVideoContainer {
   position: relative;
-  height: 100vh;
   width: 100%;
+  height: 100vh;
+
   background: rgb(1, 4, 48);
+
   overflow: hidden;
 }
+
 
 /* =========================
    MAIN VIDEO AREA
 ========================= */
 
 .conferenceView {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  display: flex;
 
   width: 100%;
   height: calc(100vh - 80px);
@@ -83,17 +85,45 @@
   gap: 12px;
 
   box-sizing: border-box;
+
+  align-items: center;
+  justify-content: center;
+
+  overflow: hidden;
 }
 
-/* Video */
+
+/* Each participant container */
+
+.conferenceView > div {
+  flex: 1;
+
+  min-width: 0;
+  height: 100%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: #111;
+
+  border-radius: 14px;
+
+  overflow: hidden;
+}
+
+
+/* Participant video */
 
 .conferenceView video {
   width: 100%;
   height: 100%;
 
-  min-height: 250px;
+  min-width: 0;
+  min-height: 0;
 
   object-fit: contain;
+  object-position: center center;
 
   border-radius: 14px;
 
@@ -101,6 +131,7 @@
 
   box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
 }
+
 
 /* =========================
    YOUR VIDEO
@@ -112,8 +143,8 @@
   right: 25px;
   bottom: 95px;
 
-  height: 160px;
   width: 220px;
+  height: 160px;
 
   object-fit: cover;
 
@@ -128,8 +159,9 @@
   z-index: 2000;
 }
 
+
 /* =========================
-   BOTTOM BUTTONS
+   BOTTOM CONTROLS
 ========================= */
 
 .buttonContainers {
@@ -137,11 +169,11 @@
 
   width: 100%;
 
+  left: 0;
   bottom: 15px;
 
-  left: 0;
-
   display: flex;
+
   justify-content: center;
   align-items: center;
 
@@ -150,60 +182,69 @@
   z-index: 3000;
 }
 
+
 .buttonContainers svg {
   font-size: 3rem;
 
   cursor: pointer;
 }
 
+
 /* =========================
-   CHAT
+   CHAT ROOM
 ========================= */
 
 .chatRoom {
   position: absolute;
 
-  height: 90vh;
-
   top: 5vh;
   right: 15px;
 
-  background: white;
-
-  border-radius: 15px;
-
   width: 30vw;
-
   min-width: 300px;
+
+  height: 90vh;
 
   padding-inline: 20px;
 
   box-sizing: border-box;
 
-  z-index: 4000;
+  background: white;
+
+  border-radius: 15px;
 
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+
+  z-index: 4000;
 }
+
 
 .chatContainer {
   position: relative;
 
+  width: 100%;
   height: 100%;
 }
+
+
+/* =========================
+   CHAT INPUT
+========================= */
 
 .chattingArea {
   position: absolute;
 
-  bottom: 0;
-
   left: 0;
   right: 0;
+  bottom: 0;
 
   display: flex;
+
   gap: 8px;
 
   padding-bottom: 10px;
 }
+
 
 .chattingArea input {
   flex: 1;
@@ -217,15 +258,26 @@
   border-radius: 6px;
 
   box-sizing: border-box;
+
+  outline: none;
 }
+
+
+.chattingArea input:focus {
+  border-color: #1976d2;
+}
+
 
 /* =========================
    MOBILE
 ========================= */
 
 @media (max-width: 768px) {
+
   .conferenceView {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+
+    width: 100%;
 
     height: calc(100vh - 75px);
 
@@ -234,11 +286,26 @@
     gap: 8px;
   }
 
-  .conferenceView video {
-    min-height: 200px;
+
+  .conferenceView > div {
+    width: 100%;
+    height: 100%;
+
+    min-height: 0;
 
     border-radius: 10px;
   }
+
+
+  .conferenceView video {
+    width: 100%;
+    height: 100%;
+
+    object-fit: contain;
+
+    border-radius: 10px;
+  }
+
 
   /* Your video */
 
@@ -252,6 +319,7 @@
     border-radius: 10px;
   }
 
+
   /* Controls */
 
   .buttonContainers {
@@ -260,9 +328,11 @@
     gap: 8px;
   }
 
+
   .buttonContainers svg {
     font-size: 2.2rem;
   }
+
 
   /* Chat */
 
@@ -277,17 +347,19 @@
     right: 0;
     bottom: 0;
 
-    border-radius: 15px 15px 0 0;
-
     padding-inline: 15px;
+
+    border-radius: 15px 15px 0 0;
   }
 }
+
 
 /* =========================
    SMALL MOBILE
 ========================= */
 
 @media (max-width: 480px) {
+
   .meetUserVideo {
     width: 105px;
     height: 75px;
@@ -296,9 +368,11 @@
     bottom: 75px;
   }
 
+
   .buttonContainers {
     gap: 5px;
   }
+
 
   .buttonContainers svg {
     font-size: 1.9rem;

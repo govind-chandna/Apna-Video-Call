@@ -27,6 +27,14 @@ export default function VideoMeetComponent() {
 
   let localVideoref = useRef();
 
+  const [localVideoPosition, setLocalVideoPosition] = useState({
+    x: 0,
+    y: 0,
+  });
+
+  const dragStart = useRef(null);
+  const meetContainerRef = useRef(null);
+
   let [videoAvailable, setVideoAvailable] = useState(true);
 
   let [audioAvailable, setAudioAvailable] = useState(true);
@@ -496,6 +504,57 @@ export default function VideoMeetComponent() {
     getMedia();
   };
 
+  const handleLocalVideoPointerDown = (e) => {
+  dragStart.current = {
+    startX: e.clientX,
+    startY: e.clientY,
+    initialX: localVideoPosition.x,
+    initialY: localVideoPosition.y,
+  };
+
+  e.currentTarget.setPointerCapture(e.pointerId);
+};
+
+  const handleLocalVideoPointerMove = (e) => {
+    if (!dragStart.current) return;
+
+    const container = meetContainerRef.current;
+    const video = e.currentTarget;
+
+    if (!container) return;
+
+    const containerRect = container.getBoundingClientRect();
+
+    const videoWidth = video.offsetWidth;
+    const videoHeight = video.offsetHeight;
+
+    let newX =
+      dragStart.current.initialX + (e.clientX - dragStart.current.startX);
+
+    let newY =
+      dragStart.current.initialY + (e.clientY - dragStart.current.startY);
+
+    // Screen ke andar X position
+    const maxX = containerRect.width - videoWidth - 25;
+    const minX = -(containerRect.width - videoWidth) + 25;
+
+    // Screen ke andar Y position
+    const maxY = containerRect.height - videoHeight - 25;
+    const minY = -(containerRect.height - videoHeight) + 25;
+
+    newX = Math.max(minX, Math.min(newX, maxX));
+    newY = Math.max(minY, Math.min(newY, maxY));
+
+    setLocalVideoPosition({
+      x: newX,
+      y: newY,
+    });
+  };
+
+  const handleLocalVideoPointerUp = () => {
+    dragStart.current = null;
+  };
+
   return (
     <div>
       {askForUsername === true ? (
@@ -517,7 +576,7 @@ export default function VideoMeetComponent() {
           </div>
         </div>
       ) : (
-        <div className={styles.meetVideoContainer}>
+        <div className={styles.meetVideoContainer} ref={meetContainerRef}>
           {showModal ? (
             <div className={styles.chatRoom}>
               <div className={styles.chatContainer}>
@@ -595,6 +654,14 @@ export default function VideoMeetComponent() {
             ref={localVideoref}
             autoPlay
             muted
+            onPointerDown={handleLocalVideoPointerDown}
+            onPointerMove={handleLocalVideoPointerMove}
+            onPointerUp={handleLocalVideoPointerUp}
+            style={{
+              transform: `translate(${localVideoPosition.x}px, ${localVideoPosition.y}px)`,
+              cursor: "grab",
+              touchAction: "none",
+            }}
           ></video>
 
           <div className={styles.conferenceView}>
@@ -608,6 +675,7 @@ export default function VideoMeetComponent() {
                     }
                   }}
                   autoPlay
+                  playsInline
                 ></video>
               </div>
             ))}
