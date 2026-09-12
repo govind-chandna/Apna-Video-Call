@@ -505,15 +505,15 @@ export default function VideoMeetComponent() {
   };
 
   const handleLocalVideoPointerDown = (e) => {
-  dragStart.current = {
-    startX: e.clientX,
-    startY: e.clientY,
-    initialX: localVideoPosition.x,
-    initialY: localVideoPosition.y,
-  };
+    dragStart.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialX: localVideoPosition.x,
+      initialY: localVideoPosition.y,
+    };
 
-  e.currentTarget.setPointerCapture(e.pointerId);
-};
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
 
   const handleLocalVideoPointerMove = (e) => {
     if (!dragStart.current) return;
@@ -580,6 +580,21 @@ export default function VideoMeetComponent() {
           {showModal ? (
             <div className={styles.chatRoom}>
               <div className={styles.chatContainer}>
+                <button
+                  onClick={() => setModal(false)}
+                  style={{
+                    position: "absolute",
+                    top: "10px",
+                    right: "10px",
+                    border: "none",
+                    background: "transparent",
+                    fontSize: "24px",
+                    cursor: "pointer",
+                    fontWeight: "bold",
+                  }}
+                >
+                  ✕
+                </button>
                 <h1>Chat</h1>
 
                 <div className={styles.chattingDisplay}>
